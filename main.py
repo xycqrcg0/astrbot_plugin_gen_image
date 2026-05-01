@@ -26,15 +26,9 @@ class GenImagePlugin(Star):
         # OpenAI compatible config
         openai_cfg = config.get("openai", {})
         self.api_key = str(openai_cfg.get("api_key", "")).strip()
-        self.txt2img_url = str(
-            openai_cfg.get(
-                "txt2img_url", "https://api.openai.com/v1/images/generations"
-            )
-        ).strip()
-        self.img2img_url = str(
-            openai_cfg.get("img2img_url", "https://api.openai.com/v1/images/edits")
-        ).strip()
-        self.model = str(openai_cfg.get("model", "dall-e-3")).strip()
+        self.txt2img_url = str(openai_cfg.get("txt2img_url", "")).strip()
+        self.img2img_url = str(openai_cfg.get("img2img_url", "")).strip()
+        self.model = str(openai_cfg.get("model", "")).strip()
         self.default_size = str(openai_cfg.get("default_size", "2048x2048")).strip()
         self.default_quality = str(openai_cfg.get("default_quality", "medium")).strip()
         self.default_background = str(
@@ -136,6 +130,7 @@ class GenImagePlugin(Star):
         quality: str = "",
         background: str = "",
         num_images: int = 1,
+        image_data: str = "",
     ) -> list[str]:
         """调用 OpenAI 兼容 API 生成图像。"""
         if not self.api_key:
@@ -152,8 +147,9 @@ class GenImagePlugin(Star):
             "size": size or self.default_size,
             "quality": quality or self.default_quality,
             "background": background or self.default_background,
-            "output_format": "png",
         }
+        if image_data:
+            payload["image"] = image_data
 
         logger.debug(
             "OpenAI image request: url=%s model=%s size=%s quality=%s",
@@ -176,10 +172,17 @@ class GenImagePlugin(Star):
                 data = await resp.json()
 
         urls: list[str] = []
-        for item in data.get("data", []):
-            url_or_b64 = item.get("url") or item.get("b64_json", "")
-            if url_or_b64:
-                urls.append(url_or_b64)
+        # Support both: {"images": ["url1", ...]} and {"data": [{"url": "..."}, ...]}
+        images = data.get("images")
+        if isinstance(images, list):
+            urls.extend(str(u) for u in images if u)
+        else:
+            for item in data.get("data", []):
+                url = item.get("url")
+                if url:
+                    urls.append(url)
+                elif item.get("b64_json"):
+                    urls.append("base64://" + item["b64_json"])
         return urls
 
     # ------------------------------------------------------------
@@ -269,6 +272,14 @@ class GenImagePlugin(Star):
 
         yield event.plain_result("🎨 正在处理图生图，请稍候...")
 
+        # Encode first attached image
+        try:
+            image_data = await images[0].convert_to_base64()
+        except Exception as e:
+            logger.exception(f"读取图片失败: {e}")
+            yield event.plain_result(f"❌ 读取图片失败: {e}")
+            return
+
         try:
             urls = await self._generate_openai(
                 self.img2img_url,
@@ -277,6 +288,7 @@ class GenImagePlugin(Star):
                 quality=args.quality,
                 background=args.background,
                 num_images=self.default_num,
+                image_data=image_data,
             )
         except Exception as e:
             logger.exception(f"图像生成失败: {e}")
