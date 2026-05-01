@@ -25,25 +25,21 @@ from astrbot.api.star import Context, Star, register
 )
 class GenImagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
-        super().__init__(context, config)
+        super().__init__(context)
         self.config = config
 
-        # OpenAI / DALL-E compatible config
-        self.api_type = str(config.get("api_type", "openai")).strip().lower()
-        self.api_key = str(config.get("api_key", "")).strip()
-        self.api_base = str(config.get("api_base", "https://api.openai.com/v1")).strip()
-        self.model = str(config.get("model", "dall-e-3")).strip()
-        self.default_size = str(config.get("default_size", "1024x1024")).strip()
-        self.default_quality = str(config.get("default_quality", "standard")).strip()
-
-        # Stable Diffusion (Automatic1111) config
-        self.sd_api_base = str(
-            config.get("sd_api_base", "http://127.0.0.1:7860")
+        openai_cfg = config.get("openai", {})
+        self.api_key = str(openai_cfg.get("api_key", "")).strip()
+        self.api_base = str(
+            openai_cfg.get("api_base", "https://api.openai.com/v1")
         ).strip()
-
-        # Common
-        self.default_num = int(config.get("default_num", 1))
-        self.timeout = int(config.get("timeout", 120))
+        self.model = str(openai_cfg.get("model", "dall-e-3")).strip()
+        self.default_size = str(openai_cfg.get("default_size", "1024x1024")).strip()
+        self.default_quality = str(
+            openai_cfg.get("default_quality", "standard")
+        ).strip()
+        self.default_num = int(openai_cfg.get("default_num", 1))
+        self.timeout = int(openai_cfg.get("timeout", 120))
 
     # ------------------------------------------------------------
     # Argument parser helpers
@@ -112,25 +108,8 @@ class GenImagePlugin(Star):
         normalized = aspect.strip().replace(" ", "")
         return mapping.get(normalized, "1024x1024")
 
-    @staticmethod
-    def _sd_size_from_aspect(aspect: str) -> tuple[int, int]:
-        """Convert aspect ratio to nearest SD-compatible dimensions."""
-        mapping = {
-            "1:1": (512, 512),
-            "16:9": (768, 432),
-            "9:16": (432, 768),
-            "4:3": (640, 480),
-            "3:4": (480, 640),
-            "3:2": (768, 512),
-            "2:3": (512, 768),
-        }
-        normalized = aspect.strip().replace(" ", "")
-        if normalized in mapping:
-            return mapping[normalized]
-        return (512, 512)
-
     # ------------------------------------------------------------
-    # Image generation backends
+    # Image generation backend
     # ------------------------------------------------------------
 
     async def _generate_openai(
@@ -193,161 +172,6 @@ class GenImagePlugin(Star):
                 urls.append(url_or_b64)
         return urls
 
-    async def _generate_sd(
-        self,
-        prompt: str,
-        *,
-        negative_prompt: str = "",
-        size: str = "",
-        num_images: int = 1,
-    ) -> list[str]:
-        """Generate images via Stable Diffusion WebUI (Automatic1111) API."""
-        base = self.sd_api_base.rstrip("/")
-
-        width, height = 512, 512
-        if size and "x" in size:
-            parts = size.split("x")
-            if len(parts) == 2:
-                try:
-                    width, height = int(parts[0]), int(parts[1])
-                except ValueError:
-                    pass
-
-        payload: dict[str, Any] = {
-            "prompt": prompt,
-            "negative_prompt": negative_prompt or "",
-            "width": width,
-            "height": height,
-            "batch_size": num_images,
-            "steps": 20,
-            "cfg_scale": 7,
-        }
-
-        logger.debug(
-            "SD txt2img request: base=%s width=%d height=%d",
-            base,
-            width,
-            height,
-        )
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{base}/sdapi/v1/txt2img",
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
-            ) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    raise RuntimeError(
-                        f"Stable Diffusion API error ({resp.status}): {error_text}"
-                    )
-                data = await resp.json()
-
-        b64_images: list[str] = data.get("images", [])
-        return [f"base64://{img}" for img in b64_images]
-
-    async def _generate_sd_img2img(
-        self,
-        prompt: str,
-        init_images: list[str],
-        *,
-        negative_prompt: str = "",
-        size: str = "",
-        num_images: int = 1,
-    ) -> list[str]:
-        """Generate images via Stable Diffusion WebUI img2img API."""
-        base = self.sd_api_base.rstrip("/")
-
-        width, height = 512, 512
-        if size and "x" in size:
-            parts = size.split("x")
-            if len(parts) == 2:
-                try:
-                    width, height = int(parts[0]), int(parts[1])
-                except ValueError:
-                    pass
-
-        payload: dict[str, Any] = {
-            "prompt": prompt,
-            "negative_prompt": negative_prompt or "",
-            "init_images": init_images,
-            "width": width,
-            "height": height,
-            "batch_size": num_images,
-            "steps": 20,
-            "cfg_scale": 7,
-            "denoising_strength": 0.75,
-        }
-
-        logger.debug(
-            "SD img2img request: base=%s width=%d height=%d",
-            base,
-            width,
-            height,
-        )
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{base}/sdapi/v1/img2img",
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
-            ) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    raise RuntimeError(
-                        f"Stable Diffusion API error ({resp.status}): {error_text}"
-                    )
-                data = await resp.json()
-
-        b64_images: list[str] = data.get("images", [])
-        return [f"base64://{img}" for img in b64_images]
-
-    # ------------------------------------------------------------
-    # Main dispatch
-    # ------------------------------------------------------------
-
-    async def _generate(
-        self,
-        prompt: str,
-        *,
-        negative_prompt: str = "",
-        style: str = "",
-        aspect_ratio: str = "",
-        model: str = "",
-        num_images: int = 0,
-    ) -> list[str]:
-        """Dispatch to the configured image generation backend."""
-        num = num_images if num_images > 0 else self.default_num
-
-        if self.api_type == "sd" or self.api_type == "stable-diffusion":
-            size = (
-                self._aspect_to_size(aspect_ratio)
-                if aspect_ratio
-                else self.default_size
-            )
-            return await self._generate_sd(
-                prompt,
-                negative_prompt=negative_prompt,
-                size=size,
-                num_images=num,
-            )
-        else:
-            # Default: OpenAI / DALL-E compatible
-            size = (
-                self._aspect_to_size(aspect_ratio)
-                if aspect_ratio
-                else self.default_size
-            )
-            if style:
-                prompt = f"{prompt}, style: {style}"
-            return await self._generate_openai(
-                prompt,
-                negative_prompt=negative_prompt,
-                model=model,
-                size=size,
-                num_images=num,
-            )
-
     # ------------------------------------------------------------
     # Handlers
     # ------------------------------------------------------------
@@ -368,8 +192,27 @@ class GenImagePlugin(Star):
 
         yield event.plain_result("🎨 Generating image, please wait...")
 
+        num = kwargs.pop("num_images", 0)
+        if num <= 0:
+            num = self.default_num
+        style = kwargs.pop("style", "")
+        aspect_ratio = kwargs.pop("aspect_ratio", "")
+        model = kwargs.get("model", "")
+        negative = kwargs.get("negative_prompt", "")
+
+        if style:
+            prompt = f"{prompt}, style: {style}"
+
+        size = self._aspect_to_size(aspect_ratio) if aspect_ratio else self.default_size
+
         try:
-            urls = await self._generate(prompt, **kwargs)
+            urls = await self._generate_openai(
+                prompt,
+                negative_prompt=negative,
+                model=model,
+                size=size,
+                num_images=num,
+            )
         except Exception as e:
             logger.exception(f"Image generation failed: {e}")
             yield event.plain_result(f"❌ Image generation failed: {e}")
@@ -402,14 +245,6 @@ class GenImagePlugin(Star):
 
         yield event.plain_result("🎨 Processing image-to-image, please wait...")
 
-        # Convert first image to base64
-        try:
-            init_b64 = await images[0].convert_to_base64()
-        except Exception as e:
-            logger.exception(f"Failed to read input image: {e}")
-            yield event.plain_result(f"❌ Failed to read input image: {e}")
-            return
-
         num = kwargs.get("num_images", 0)
         if num <= 0:
             num = self.default_num
@@ -417,37 +252,19 @@ class GenImagePlugin(Star):
         negative = kwargs.get("negative_prompt", "")
         style = kwargs.get("style", "")
 
-        if self.api_type == "sd" or self.api_type == "stable-diffusion":
-            size = self.default_size
-            aspect = kwargs.get("aspect_ratio", "")
-            if aspect:
-                size = self._aspect_to_size(aspect)
-            try:
-                urls = await self._generate_sd_img2img(
-                    prompt,
-                    [init_b64],
-                    negative_prompt=negative,
-                    size=size,
-                    num_images=num,
-                )
-            except Exception as e:
-                logger.exception(f"SD img2img failed: {e}")
-                yield event.plain_result(f"❌ Image generation failed: {e}")
-                return
-        else:
-            # For OpenAI, we simulate img2img by enhancing the prompt with image context
-            if style:
-                prompt = f"{prompt}, style: {style}"
-            try:
-                urls = await self._generate_openai(
-                    prompt,
-                    negative_prompt=negative,
-                    num_images=num,
-                )
-            except Exception as e:
-                logger.exception(f"OpenAI image generation failed: {e}")
-                yield event.plain_result(f"❌ Image generation failed: {e}")
-                return
+        if style:
+            prompt = f"{prompt}, style: {style}"
+
+        try:
+            urls = await self._generate_openai(
+                prompt,
+                negative_prompt=negative,
+                num_images=num,
+            )
+        except Exception as e:
+            logger.exception(f"Image generation failed: {e}")
+            yield event.plain_result(f"❌ Image generation failed: {e}")
+            return
 
         for url in urls:
             yield event.image_result(url)

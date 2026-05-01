@@ -1,0 +1,42 @@
+{
+    "openai": {
+        "description": "OpenAI 兼容 API 配置",
+        "type": "object",
+        "items": {
+            "api_key": {
+                "description": "API 密钥",
+                "type": "string"
+            },
+            "api_base": {
+                "description": "API 基础地址",
+                "hint": "默认: https://api.openai.com/v1",
+                "type": "string"
+            },
+            "model": {
+                "description": "模型名称",
+                "hint": "默认: dall-e-3",
+                "type": "string"
+            },
+            "default_size": {
+                "description": "默认图片尺寸",
+                "hint": "默认: 1024x1024",
+                "type": "string"
+            },
+            "default_quality": {
+                "description": "默认图片质量 (standard 或 hd)",
+                "hint": "默认: standard",
+                "type": "string"
+            },
+            "default_num": {
+                "description": "默认生成图片数量",
+                "hint": "默认: 1",
+                "type": "int"
+            },
+            "timeout": {
+                "description": "API 请求超时时间 (秒)",
+                "hint": "默认: 120",
+                "type": "int"
+            }
+        }
+    }
+}
