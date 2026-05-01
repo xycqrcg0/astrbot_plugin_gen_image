@@ -1,7 +1,6 @@
 name: astrbot_plugin_gen_image
 display_name: Gen Image
-desc: AI Image Generation Plugin. Use :draw for text-to-image, :pdraw for
-  image-to-image.
+desc: AI 图像生成插件。:draw 文生图，:pdraw 图生图。
 version: v1.0.0
 author: AstrBot
 repo: ""

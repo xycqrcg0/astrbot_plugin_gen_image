@@ -1,10 +1,10 @@
-"""Gen Image Plugin for AstrBot.
+"""Gen Image 插件。
 
-Supports:
-- :draw -p <prompt> [-pre <preset>] [-s <size>] [-q <quality>] [-b <background>]
-- :pdraw -p <prompt> [-pre <preset>] [-s <size>] [-q <quality>] [-b <background>] (with an attached image)
+支持命令:
+- :draw -p <提示词> [-pre <预设名>] [-s <尺寸>] [-q <质量>] [-b <背景>]
+- :pdraw -p <提示词> [-pre <预设名>] [-s <尺寸>] [-q <质量>] [-b <背景>] (需附带图片)
 
-At least one of `-p` or `-pre` is required.
+-p 和 -pre 至少提供一个。
 """
 
 import argparse
@@ -75,35 +75,35 @@ class GenImagePlugin(Star):
     @staticmethod
     def _build_argparser() -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(add_help=False)
-        parser.add_argument("-p", "--prompt", default="", help="Image prompt")
-        parser.add_argument("-pre", "--preset", default="", help="Preset prompt key")
+        parser.add_argument("-p", "--prompt", default="", help="图像提示词")
+        parser.add_argument("-pre", "--preset", default="", help="预设提示词名称")
         parser.add_argument(
             "-s",
             "--size",
             default="2048x2048",
             choices=GenImagePlugin.SIZES,
-            help="Image size",
+            help="图像尺寸",
         )
         parser.add_argument(
             "-q",
             "--quality",
             default="medium",
             choices=GenImagePlugin.QUALITIES,
-            help="Image quality",
+            help="图像质量",
         )
         parser.add_argument(
             "-b",
             "--background",
             default="auto",
             choices=GenImagePlugin.BACKGROUNDS,
-            help="Background mode",
+            help="背景模式",
         )
         return parser
 
     def _resolve_prompt(self, preset_key: str, user_prompt: str) -> str | None:
-        """Resolve the final prompt from preset key and/or user prompt.
+        """根据预设名和用户提示词解析最终提示词。
 
-        Returns the resolved prompt string, or None if neither is provided.
+        返回完整提示词，如果两者都未提供则返回 None。
         """
         result_parts: list[str] = []
         if preset_key:
@@ -116,7 +116,7 @@ class GenImagePlugin(Star):
         return ", ".join(result_parts) if result_parts else None
 
     def _parse_named_args(self, raw_args: str) -> argparse.Namespace | None:
-        """Parse named arguments from the raw command args string."""
+        """解析命令行风格参数。"""
         parser = self._build_argparser()
         try:
             return parser.parse_args(raw_args.split())
@@ -137,11 +137,9 @@ class GenImagePlugin(Star):
         background: str = "",
         num_images: int = 1,
     ) -> list[str]:
-        """Generate images via OpenAI / DALL-E compatible API."""
+        """调用 OpenAI 兼容 API 生成图像。"""
         if not self.api_key:
-            raise ValueError(
-                "OpenAI API key not configured. Set api_key in plugin config."
-            )
+            raise ValueError("API 密钥未配置，请在插件设置中填写 api_key。")
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -174,9 +172,7 @@ class GenImagePlugin(Star):
             ) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()
-                    raise RuntimeError(
-                        f"OpenAI API error ({resp.status}): {error_text}"
-                    )
+                    raise RuntimeError(f"API 请求失败 ({resp.status}): {error_text}")
                 data = await resp.json()
 
         urls: list[str] = []
@@ -191,7 +187,7 @@ class GenImagePlugin(Star):
     # ------------------------------------------------------------
 
     def _strip_command_prefix(self, message_str: str, command: str) -> str:
-        """Strip the command prefix and return remaining args."""
+        """去除命令前缀，返回剩余参数。"""
         text = (message_str or "").strip()
         if not text:
             return ""
@@ -203,28 +199,28 @@ class GenImagePlugin(Star):
 
     @filter.command("draw")
     async def draw_command(self, event: AstrMessageEvent):
-        """Text-to-image generation."""
+        """文生图。"""
         raw_args = self._strip_command_prefix(event.message_str, "draw")
         args = self._parse_named_args(raw_args)
         if args is None:
             yield event.plain_result(
-                "Usage: :draw -p <prompt> [-pre <preset_key>] [-s <size>] [-q <quality>] [-b <background>]\n"
-                "At least one of -p or -pre is required."
+                "用法: :draw -p <提示词> [-pre <预设名>] [-s <尺寸>] [-q <质量>] [-b <背景>]\n"
+                "-p 和 -pre 至少提供一个。"
             )
             return
 
         prompt = self._resolve_prompt(args.preset, args.prompt)
         if not prompt:
             if args.preset:
-                yield event.plain_result(f"❌ Unknown preset key: {args.preset}")
+                yield event.plain_result(f"❌ 未知预设名: {args.preset}")
             else:
                 yield event.plain_result(
-                    "Usage: :draw -p <prompt> [-pre <preset_key>] [-s <size>] [-q <quality>] [-b <background>]\n"
-                    "At least one of -p or -pre is required."
+                    "用法: :draw -p <提示词> [-pre <预设名>] [-s <尺寸>] [-q <质量>] [-b <背景>]\n"
+                    "-p 和 -pre 至少提供一个。"
                 )
             return
 
-        yield event.plain_result("🎨 Generating image, please wait...")
+        yield event.plain_result("🎨 正在生成图像，请稍候...")
 
         try:
             urls = await self._generate_openai(
@@ -236,8 +232,8 @@ class GenImagePlugin(Star):
                 num_images=self.default_num,
             )
         except Exception as e:
-            logger.exception(f"Image generation failed: {e}")
-            yield event.plain_result(f"❌ Image generation failed: {e}")
+            logger.exception(f"图像生成失败: {e}")
+            yield event.plain_result(f"❌ 图像生成失败: {e}")
             return
 
         for url in urls:
@@ -245,13 +241,12 @@ class GenImagePlugin(Star):
 
     @filter.command("pdraw")
     async def pdraw_command(self, event: AstrMessageEvent):
-        """Image-to-image generation."""
-        # Require an attached image
+        """图生图。"""
         images = [c for c in event.get_messages() if isinstance(c, Comp.Image)]
         if not images:
             yield event.plain_result(
-                "Usage: :pdraw -p <prompt> [-pre <preset_key>] [-s <size>] [-q <quality>] [-b <background>] (attach an image)\n"
-                "At least one of -p or -pre is required."
+                "用法: :pdraw -p <提示词> [-pre <预设名>] [-s <尺寸>] [-q <质量>] [-b <背景>] (需附带图片)\n"
+                "-p 和 -pre 至少提供一个。"
             )
             return
 
@@ -259,20 +254,20 @@ class GenImagePlugin(Star):
         args = self._parse_named_args(raw_args)
         if args is None:
             yield event.plain_result(
-                "Usage: :pdraw -p <prompt> [-pre <preset_key>] [-s <size>] [-q <quality>] [-b <background>] (attach an image)\n"
-                "At least one of -p or -pre is required."
+                "用法: :pdraw -p <提示词> [-pre <预设名>] [-s <尺寸>] [-q <质量>] [-b <背景>] (需附带图片)\n"
+                "-p 和 -pre 至少提供一个。"
             )
             return
 
         prompt = self._resolve_prompt(args.preset, args.prompt)
         if not prompt:
             if args.preset:
-                yield event.plain_result(f"❌ Unknown preset key: {args.preset}")
+                yield event.plain_result(f"❌ 未知预设名: {args.preset}")
             else:
-                yield event.plain_result("At least one of -p or -pre is required.")
+                yield event.plain_result("-p 和 -pre 至少提供一个。")
             return
 
-        yield event.plain_result("🎨 Processing image-to-image, please wait...")
+        yield event.plain_result("🎨 正在处理图生图，请稍候...")
 
         try:
             urls = await self._generate_openai(
@@ -284,13 +279,13 @@ class GenImagePlugin(Star):
                 num_images=self.default_num,
             )
         except Exception as e:
-            logger.exception(f"Image generation failed: {e}")
-            yield event.plain_result(f"❌ Image generation failed: {e}")
+            logger.exception(f"图像生成失败: {e}")
+            yield event.plain_result(f"❌ 图像生成失败: {e}")
             return
 
         for url in urls:
             yield event.image_result(url)
 
     async def terminate(self):
-        """Cleanup on plugin unload."""
+        """插件卸载时清理。"""
         pass
