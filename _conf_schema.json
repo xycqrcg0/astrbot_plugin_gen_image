@@ -7,19 +7,19 @@
                 "description": "API 密钥",
                 "type": "string"
             },
-            "txt2img_url": {
-                "description": "文生图 API 完整地址",
-                "hint": "例如: https://api.openai.com/v1/images/generations",
-                "type": "string"
-            },
-            "img2img_url": {
-                "description": "图生图 API 完整地址",
-                "hint": "例如: https://api.openai.com/v1/images/edits",
+            "api_base": {
+                "description": "API 基础地址",
+                "hint": "例如: https://api.jiekou.ai/v3",
                 "type": "string"
             },
             "model": {
-                "description": "模型名称",
-                "hint": "默认: dall-e-3",
+                "description": "文生图模型名称",
+                "hint": "例如: gpt-image-2",
+                "type": "string"
+            },
+            "img_model": {
+                "description": "图生图模型名称",
+                "hint": "例如: gpt-image-2",
                 "type": "string"
             },
             "default_size": {

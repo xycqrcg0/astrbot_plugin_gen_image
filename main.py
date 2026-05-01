@@ -26,9 +26,15 @@ class GenImagePlugin(Star):
         # OpenAI compatible config
         openai_cfg = config.get("openai", {})
         self.api_key = str(openai_cfg.get("api_key", "")).strip()
-        self.txt2img_url = str(openai_cfg.get("txt2img_url", "")).strip()
-        self.img2img_url = str(openai_cfg.get("img2img_url", "")).strip()
-        self.model = str(openai_cfg.get("model", "")).strip()
+        api_base = str(openai_cfg.get("api_base", "")).strip().rstrip("/")
+        model = str(openai_cfg.get("model", "")).strip()
+        img_model = str(openai_cfg.get("img_model", "")).strip()
+        self.txt2img_url = (
+            f"{api_base}/{model}" if (api_base and model) else ""
+        )
+        self.img2img_url = (
+            f"{api_base}/{img_model}" if (api_base and img_model) else ""
+        )
         self.default_size = str(openai_cfg.get("default_size", "2048x2048")).strip()
         self.default_quality = str(openai_cfg.get("default_quality", "medium")).strip()
         self.default_background = str(
@@ -141,7 +147,6 @@ class GenImagePlugin(Star):
             "Content-Type": "application/json",
         }
         payload: dict[str, Any] = {
-            "model": self.model,
             "prompt": prompt,
             "n": num_images,
             "size": size or self.default_size,
@@ -152,9 +157,8 @@ class GenImagePlugin(Star):
             payload["image"] = image_data
 
         logger.debug(
-            "OpenAI image request: url=%s model=%s size=%s quality=%s",
+            "图像请求: url=%s size=%s quality=%s",
             url,
-            payload["model"],
             payload["size"],
             payload["quality"],
         )
