@@ -7,9 +7,14 @@
                 "description": "API 密钥",
                 "type": "string"
             },
-            "api_base": {
-                "description": "API 基础地址",
-                "hint": "默认: https://api.openai.com/v1",
+            "txt2img_url": {
+                "description": "文生图 API 完整地址",
+                "hint": "例如: https://api.openai.com/v1/images/generations",
+                "type": "string"
+            },
+            "img2img_url": {
+                "description": "图生图 API 完整地址",
+                "hint": "例如: https://api.openai.com/v1/images/edits",
                 "type": "string"
             },
             "model": {
@@ -19,12 +24,17 @@
             },
             "default_size": {
                 "description": "默认图片尺寸",
-                "hint": "默认: 1024x1024",
+                "hint": "默认: 2048x2048",
                 "type": "string"
             },
             "default_quality": {
-                "description": "默认图片质量 (standard 或 hd)",
-                "hint": "默认: standard",
+                "description": "默认图片质量",
+                "hint": "默认: medium",
+                "type": "string"
+            },
+            "default_background": {
+                "description": "默认背景",
+                "hint": "transparent / opaque / auto，默认: auto",
                 "type": "string"
             },
             "default_num": {
@@ -36,6 +46,17 @@
                 "description": "API 请求超时时间 (秒)",
                 "hint": "默认: 120",
                 "type": "int"
+            }
+        }
+    },
+    "presets": {
+        "description": "预设 prompt 配置",
+        "type": "object",
+        "items": {
+            "preset_list": {
+                "description": "预设列表，每行一个: key=value",
+                "hint": "例如:\nportrait=美丽的肖像照\nlandscape=风景照",
+                "type": "text"
             }
         }
     }

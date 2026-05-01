@@ -1,12 +1,13 @@
 """Gen Image Plugin for AstrBot.
 
 Supports:
-- :draw <prompt> [-b <negative>] [-s <style>] [-ar <aspect>] [-m <model>] [-n <count>]
-- :pdraw <prompt> [-b <negative>] [-s <style>] [-m <model>] (with an attached image)
+- :draw -p <prompt> [-pre <preset>] [-s <size>] [-q <quality>] [-b <background>]
+- :pdraw -p <prompt> [-pre <preset>] [-s <size>] [-q <quality>] [-b <background>] (with an attached image)
+
+At least one of `-p` or `-pre` is required.
 """
 
 import argparse
-import re
 from typing import Any
 
 import aiohttp
@@ -14,99 +15,113 @@ import aiohttp
 import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star
 
 
-@register(
-    "astrbot_plugin_gen_image",
-    "AstrBot",
-    "AI Image Generation Plugin. Use :draw for text-to-image, :pdraw for image-to-image.",
-    "1.0.0",
-)
 class GenImagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
 
+        # OpenAI compatible config
         openai_cfg = config.get("openai", {})
         self.api_key = str(openai_cfg.get("api_key", "")).strip()
-        self.api_base = str(
-            openai_cfg.get("api_base", "https://api.openai.com/v1")
+        self.txt2img_url = str(
+            openai_cfg.get(
+                "txt2img_url", "https://api.openai.com/v1/images/generations"
+            )
+        ).strip()
+        self.img2img_url = str(
+            openai_cfg.get("img2img_url", "https://api.openai.com/v1/images/edits")
         ).strip()
         self.model = str(openai_cfg.get("model", "dall-e-3")).strip()
-        self.default_size = str(openai_cfg.get("default_size", "1024x1024")).strip()
-        self.default_quality = str(
-            openai_cfg.get("default_quality", "standard")
+        self.default_size = str(openai_cfg.get("default_size", "2048x2048")).strip()
+        self.default_quality = str(openai_cfg.get("default_quality", "medium")).strip()
+        self.default_background = str(
+            openai_cfg.get("default_background", "auto")
         ).strip()
         self.default_num = int(openai_cfg.get("default_num", 1))
         self.timeout = int(openai_cfg.get("timeout", 120))
+
+        # Preset prompts: key=value per line
+        presets_cfg = config.get("presets", {})
+        preset_text = str(presets_cfg.get("preset_list", "")).strip()
+        self.presets: dict[str, str] = {}
+        if preset_text:
+            for line in preset_text.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    self.presets[key.strip()] = value.strip()
 
     # ------------------------------------------------------------
     # Argument parser helpers
     # ------------------------------------------------------------
 
+    SIZES = [
+        "1024x1024",
+        "1024x1536",
+        "1536x1024",
+        "2048x2048",
+        "2048x1152",
+        "3840x2160",
+        "2160x3840",
+    ]
+    QUALITIES = ["low", "medium", "high"]
+    BACKGROUNDS = ["transparent", "opaque", "auto"]
+
     @staticmethod
     def _build_argparser() -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(add_help=False)
-        parser.add_argument("prompt", nargs="?", default="")
-        parser.add_argument("-b", "--negative", default="", help="Negative prompt")
-        parser.add_argument("-s", "--style", default="", help="Style preset")
+        parser.add_argument("-p", "--prompt", default="", help="Image prompt")
+        parser.add_argument("-pre", "--preset", default="", help="Preset prompt key")
         parser.add_argument(
-            "-ar", "--aspect", default="", help="Aspect ratio, e.g. 16:9"
+            "-s",
+            "--size",
+            default="2048x2048",
+            choices=GenImagePlugin.SIZES,
+            help="Image size",
         )
-        parser.add_argument("-m", "--model", default="", help="Model override")
-        parser.add_argument("-n", "--num", type=int, default=0, help="Number of images")
+        parser.add_argument(
+            "-q",
+            "--quality",
+            default="medium",
+            choices=GenImagePlugin.QUALITIES,
+            help="Image quality",
+        )
+        parser.add_argument(
+            "-b",
+            "--background",
+            default="auto",
+            choices=GenImagePlugin.BACKGROUNDS,
+            help="Background mode",
+        )
         return parser
 
-    @staticmethod
-    def _parse_draw_args(
-        message_str: str,
-    ) -> tuple[str, dict[str, Any]] | None:
-        """Parse :draw/:pdraw arguments from the message string.
+    def _resolve_prompt(self, preset_key: str, user_prompt: str) -> str | None:
+        """Resolve the final prompt from preset key and/or user prompt.
 
-        Returns (prompt, kwargs) on success, or None if the command doesn't match.
+        Returns the resolved prompt string, or None if neither is provided.
         """
-        text = message_str.strip()
-        matched = re.match(r"^:(draw|pdraw)\b\s*", text)
-        if not matched:
-            return None
-        remainder = text[matched.end() :].strip()
+        result_parts: list[str] = []
+        if preset_key:
+            preset_text = self.presets.get(preset_key, "")
+            if not preset_text:
+                return None  # invalid preset
+            result_parts.append(preset_text)
+        if user_prompt:
+            result_parts.append(user_prompt)
+        return ", ".join(result_parts) if result_parts else None
 
-        parser = GenImagePlugin._build_argparser()
+    def _parse_named_args(self, raw_args: str) -> argparse.Namespace | None:
+        """Parse named arguments from the raw command args string."""
+        parser = self._build_argparser()
         try:
-            args = parser.parse_args(remainder.split())
+            return parser.parse_args(raw_args.split())
         except (SystemExit, ValueError):
             return None
-
-        kwargs: dict[str, Any] = {}
-        prompt = args.prompt
-        if args.negative:
-            kwargs["negative_prompt"] = args.negative
-        if args.style:
-            kwargs["style"] = args.style
-        if args.aspect:
-            kwargs["aspect_ratio"] = args.aspect
-        if args.model:
-            kwargs["model"] = args.model
-        if args.num and args.num > 0:
-            kwargs["num_images"] = args.num
-
-        return prompt, kwargs
-
-    @staticmethod
-    def _aspect_to_size(aspect: str) -> str:
-        """Convert aspect ratio string to a standard size supported by DALL-E."""
-        mapping = {
-            "1:1": "1024x1024",
-            "16:9": "1792x1024",
-            "9:16": "1024x1792",
-            "4:3": "1024x768",
-            "3:4": "768x1024",
-            "3:2": "1216x832",
-            "2:3": "832x1216",
-        }
-        normalized = aspect.strip().replace(" ", "")
-        return mapping.get(normalized, "1024x1024")
 
     # ------------------------------------------------------------
     # Image generation backend
@@ -114,12 +129,12 @@ class GenImagePlugin(Star):
 
     async def _generate_openai(
         self,
+        url: str,
         prompt: str,
         *,
-        negative_prompt: str = "",
-        model: str = "",
         size: str = "",
         quality: str = "",
+        background: str = "",
         num_images: int = 1,
     ) -> list[str]:
         """Generate images via OpenAI / DALL-E compatible API."""
@@ -128,27 +143,26 @@ class GenImagePlugin(Star):
                 "OpenAI API key not configured. Set api_key in plugin config."
             )
 
-        url = f"{self.api_base.rstrip('/')}/images/generations"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
         payload: dict[str, Any] = {
-            "model": model or self.model,
+            "model": self.model,
             "prompt": prompt,
             "n": num_images,
             "size": size or self.default_size,
             "quality": quality or self.default_quality,
+            "background": background or self.default_background,
+            "output_format": "png",
         }
-        if negative_prompt:
-            # Some compatible providers support negative_prompt
-            payload["negative_prompt"] = negative_prompt
 
         logger.debug(
-            "OpenAI image request: url=%s model=%s size=%s",
+            "OpenAI image request: url=%s model=%s size=%s quality=%s",
             url,
             payload["model"],
             payload["size"],
+            payload["quality"],
         )
 
         async with aiohttp.ClientSession() as session:
@@ -176,42 +190,50 @@ class GenImagePlugin(Star):
     # Handlers
     # ------------------------------------------------------------
 
-    @filter.regex(r"^:draw\b")
+    def _strip_command_prefix(self, message_str: str, command: str) -> str:
+        """Strip the command prefix and return remaining args."""
+        text = (message_str or "").strip()
+        if not text:
+            return ""
+        parts = text.split(maxsplit=1)
+        cmd = parts[0].lower()
+        if cmd in {command, f"/{command}", f":{command}"}:
+            return parts[1].strip() if len(parts) > 1 else ""
+        return text
+
+    @filter.command("draw")
     async def draw_command(self, event: AstrMessageEvent):
         """Text-to-image generation."""
-        result = self._parse_draw_args(event.get_message_str())
-        if result is None:
-            return
-        prompt, kwargs = result
-
-        if not prompt:
+        raw_args = self._strip_command_prefix(event.message_str, "draw")
+        args = self._parse_named_args(raw_args)
+        if args is None:
             yield event.plain_result(
-                "Usage: :draw <prompt> [-b <negative>] [-s <style>] [-ar <aspect>] [-m <model>] [-n <count>]"
+                "Usage: :draw -p <prompt> [-pre <preset_key>] [-s <size>] [-q <quality>] [-b <background>]\n"
+                "At least one of -p or -pre is required."
             )
+            return
+
+        prompt = self._resolve_prompt(args.preset, args.prompt)
+        if not prompt:
+            if args.preset:
+                yield event.plain_result(f"❌ Unknown preset key: {args.preset}")
+            else:
+                yield event.plain_result(
+                    "Usage: :draw -p <prompt> [-pre <preset_key>] [-s <size>] [-q <quality>] [-b <background>]\n"
+                    "At least one of -p or -pre is required."
+                )
             return
 
         yield event.plain_result("🎨 Generating image, please wait...")
 
-        num = kwargs.pop("num_images", 0)
-        if num <= 0:
-            num = self.default_num
-        style = kwargs.pop("style", "")
-        aspect_ratio = kwargs.pop("aspect_ratio", "")
-        model = kwargs.get("model", "")
-        negative = kwargs.get("negative_prompt", "")
-
-        if style:
-            prompt = f"{prompt}, style: {style}"
-
-        size = self._aspect_to_size(aspect_ratio) if aspect_ratio else self.default_size
-
         try:
             urls = await self._generate_openai(
+                self.txt2img_url,
                 prompt,
-                negative_prompt=negative,
-                model=model,
-                size=size,
-                num_images=num,
+                size=args.size,
+                quality=args.quality,
+                background=args.background,
+                num_images=self.default_num,
             )
         except Exception as e:
             logger.exception(f"Image generation failed: {e}")
@@ -221,45 +243,45 @@ class GenImagePlugin(Star):
         for url in urls:
             yield event.image_result(url)
 
-    @filter.regex(r"^:pdraw\b")
+    @filter.command("pdraw")
     async def pdraw_command(self, event: AstrMessageEvent):
         """Image-to-image generation."""
-        result = self._parse_draw_args(event.get_message_str())
-        if result is None:
-            return
-        prompt, kwargs = result
-
-        # Extract attached images
+        # Require an attached image
         images = [c for c in event.get_messages() if isinstance(c, Comp.Image)]
         if not images:
             yield event.plain_result(
-                "Usage: :pdraw <prompt> [-b <negative>] [-s <style>] [-m <model>] (attach an image)"
+                "Usage: :pdraw -p <prompt> [-pre <preset_key>] [-s <size>] [-q <quality>] [-b <background>] (attach an image)\n"
+                "At least one of -p or -pre is required."
             )
             return
 
-        if not prompt:
+        raw_args = self._strip_command_prefix(event.message_str, "pdraw")
+        args = self._parse_named_args(raw_args)
+        if args is None:
             yield event.plain_result(
-                "Please provide a prompt for image-to-image generation."
+                "Usage: :pdraw -p <prompt> [-pre <preset_key>] [-s <size>] [-q <quality>] [-b <background>] (attach an image)\n"
+                "At least one of -p or -pre is required."
             )
+            return
+
+        prompt = self._resolve_prompt(args.preset, args.prompt)
+        if not prompt:
+            if args.preset:
+                yield event.plain_result(f"❌ Unknown preset key: {args.preset}")
+            else:
+                yield event.plain_result("At least one of -p or -pre is required.")
             return
 
         yield event.plain_result("🎨 Processing image-to-image, please wait...")
 
-        num = kwargs.get("num_images", 0)
-        if num <= 0:
-            num = self.default_num
-
-        negative = kwargs.get("negative_prompt", "")
-        style = kwargs.get("style", "")
-
-        if style:
-            prompt = f"{prompt}, style: {style}"
-
         try:
             urls = await self._generate_openai(
+                self.img2img_url,
                 prompt,
-                negative_prompt=negative,
-                num_images=num,
+                size=args.size,
+                quality=args.quality,
+                background=args.background,
+                num_images=self.default_num,
             )
         except Exception as e:
             logger.exception(f"Image generation failed: {e}")
