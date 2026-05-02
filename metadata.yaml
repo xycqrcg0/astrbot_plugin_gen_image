@@ -3,4 +3,4 @@ display_name: Gen Image
 desc: AI 图像生成插件。:draw 文生图，:pdraw 图生图。
 version: v1.0.0
 author: AstrBot
-repo: ""
+repo: https://github.com/your-username/astrbot_plugin_gen_image
