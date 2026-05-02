@@ -54,8 +54,8 @@
         "type": "object",
         "items": {
             "preset_list": {
-                "description": "预设列表，每行一个: key=value",
-                "hint": "例如:\nportrait=美丽的肖像照\nlandscape=风景照",
+                "description": "预设列表，每行一个: key=value，回车隔开",
+                "hint": "例如:\nportrait=1111\nlandscape=2222",
                 "type": "text"
             }
         }

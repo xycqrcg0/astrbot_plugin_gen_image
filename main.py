@@ -7,7 +7,7 @@
 -p 和 -pre 至少提供一个。
 """
 
-import argparse
+import re
 from typing import Any
 
 import aiohttp
@@ -29,12 +29,8 @@ class GenImagePlugin(Star):
         api_base = str(openai_cfg.get("api_base", "")).strip().rstrip("/")
         model = str(openai_cfg.get("model", "")).strip()
         img_model = str(openai_cfg.get("img_model", "")).strip()
-        self.txt2img_url = (
-            f"{api_base}/{model}" if (api_base and model) else ""
-        )
-        self.img2img_url = (
-            f"{api_base}/{img_model}" if (api_base and img_model) else ""
-        )
+        self.txt2img_url = f"{api_base}/{model}" if (api_base and model) else ""
+        self.img2img_url = f"{api_base}/{img_model}" if (api_base and img_model) else ""
         self.default_size = str(openai_cfg.get("default_size", "2048x2048")).strip()
         self.default_quality = str(openai_cfg.get("default_quality", "medium")).strip()
         self.default_background = str(
@@ -52,15 +48,20 @@ class GenImagePlugin(Star):
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
-                if "=" in line:
-                    key, _, value = line.partition("=")
-                    self.presets[key.strip()] = value.strip()
+                if "=" not in line:
+                    logger.warning(f"预设行缺少 '='，已忽略: {line}")
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                if key in self.presets:
+                    logger.warning(f"预设键重复，将覆盖: {key}")
+                self.presets[key] = value.strip()
 
     # ------------------------------------------------------------
     # Argument parser helpers
     # ------------------------------------------------------------
 
-    SIZES = [
+    SIZES = {
         "1024x1024",
         "1024x1536",
         "1536x1024",
@@ -68,37 +69,9 @@ class GenImagePlugin(Star):
         "2048x1152",
         "3840x2160",
         "2160x3840",
-    ]
-    QUALITIES = ["low", "medium", "high"]
-    BACKGROUNDS = ["transparent", "opaque", "auto"]
-
-    @staticmethod
-    def _build_argparser() -> argparse.ArgumentParser:
-        parser = argparse.ArgumentParser(add_help=False)
-        parser.add_argument("-p", "--prompt", default="", help="图像提示词")
-        parser.add_argument("-pre", "--preset", default="", help="预设提示词名称")
-        parser.add_argument(
-            "-s",
-            "--size",
-            default="2048x2048",
-            choices=GenImagePlugin.SIZES,
-            help="图像尺寸",
-        )
-        parser.add_argument(
-            "-q",
-            "--quality",
-            default="medium",
-            choices=GenImagePlugin.QUALITIES,
-            help="图像质量",
-        )
-        parser.add_argument(
-            "-b",
-            "--background",
-            default="auto",
-            choices=GenImagePlugin.BACKGROUNDS,
-            help="背景模式",
-        )
-        return parser
+    }
+    QUALITIES = {"low", "medium", "high"}
+    BACKGROUNDS = {"transparent", "opaque", "auto"}
 
     def _resolve_prompt(self, preset_key: str, user_prompt: str) -> str | None:
         """根据预设名和用户提示词解析最终提示词。
@@ -115,13 +88,48 @@ class GenImagePlugin(Star):
             result_parts.append(user_prompt)
         return ", ".join(result_parts) if result_parts else None
 
-    def _parse_named_args(self, raw_args: str) -> argparse.Namespace | None:
-        """解析命令行风格参数。"""
-        parser = self._build_argparser()
-        try:
-            return parser.parse_args(raw_args.split())
-        except (SystemExit, ValueError):
-            return None
+    def _parse_named_args(self, raw_args: str) -> dict[str, str]:
+        """Parse named arguments from raw string using regex.
+
+        -p/--prompt captures multi-word text until the next flag or end.
+        Other flags capture a single token.
+        Returns a dict; check '_error' key for validation failures.
+        """
+        result: dict[str, str] = {}
+
+        # -p / --prompt: multi-word until next flag or EOS
+        m = re.search(r"(?:-p|--prompt)\s+(.+?)(?=\s+-[a-zA-Z]|$)", raw_args)
+        if m:
+            result["prompt"] = m.group(1).strip()
+
+        # Single-value flags
+        for short, long in [
+            ("pre", "preset"),
+            ("s", "size"),
+            ("q", "quality"),
+            ("b", "background"),
+        ]:
+            m = re.search(rf"(?:-{short}|--{long})\s+(\S+)", raw_args)
+            if m:
+                result[long] = m.group(1)
+
+        # Validate choices with helpful error messages
+        if "size" in result and result["size"] not in self.SIZES:
+            result["_error"] = (
+                f"无效尺寸: {result['size']}\n" f"可选: {', '.join(sorted(self.SIZES))}"
+            )
+        elif "quality" in result and result["quality"] not in self.QUALITIES:
+            result["_error"] = (
+                f"无效质量: {result['quality']}\n"
+                f"可选: {', '.join(sorted(self.QUALITIES))}"
+            )
+        elif "background" in result and result["background"] not in self.BACKGROUNDS:
+            result["_error"] = (
+                f"无效背景: {result['background']}\n"
+                f"可选: {', '.join(sorted(self.BACKGROUNDS))}"
+            )
+
+        return result
 
     # ------------------------------------------------------------
     # Image generation backend
@@ -209,17 +217,23 @@ class GenImagePlugin(Star):
         """文生图。"""
         raw_args = self._strip_command_prefix(event.message_str, "draw")
         args = self._parse_named_args(raw_args)
-        if args is None:
+        if "_error" in args:
+            yield event.plain_result(f"❌ {args['_error']}")
+            return
+        if not args.get("prompt") and not args.get("preset"):
             yield event.plain_result(
                 "用法: :draw -p <提示词> [-pre <预设名>] [-s <尺寸>] [-q <质量>] [-b <背景>]\n"
                 "-p 和 -pre 至少提供一个。"
             )
             return
 
-        prompt = self._resolve_prompt(args.preset, args.prompt)
+        prompt = self._resolve_prompt(args.get("preset", ""), args.get("prompt", ""))
         if not prompt:
-            if args.preset:
-                yield event.plain_result(f"❌ 未知预设名: {args.preset}")
+            if args.get("preset"):
+                available = ", ".join(sorted(self.presets)) if self.presets else "(无)"
+                yield event.plain_result(
+                    f"❌ 未知预设名: {args.get('preset')}\n" f"可用预设: {available}"
+                )
             else:
                 yield event.plain_result(
                     "用法: :draw -p <提示词> [-pre <预设名>] [-s <尺寸>] [-q <质量>] [-b <背景>]\n"
@@ -233,9 +247,9 @@ class GenImagePlugin(Star):
             urls = await self._generate_openai(
                 self.txt2img_url,
                 prompt,
-                size=args.size,
-                quality=args.quality,
-                background=args.background,
+                size=args.get("size", ""),
+                quality=args.get("quality", ""),
+                background=args.get("background", ""),
                 num_images=self.default_num,
             )
         except Exception as e:
@@ -259,17 +273,23 @@ class GenImagePlugin(Star):
 
         raw_args = self._strip_command_prefix(event.message_str, "pdraw")
         args = self._parse_named_args(raw_args)
-        if args is None:
+        if "_error" in args:
+            yield event.plain_result(f"❌ {args['_error']}")
+            return
+        if not args.get("prompt") and not args.get("preset"):
             yield event.plain_result(
                 "用法: :pdraw -p <提示词> [-pre <预设名>] [-s <尺寸>] [-q <质量>] [-b <背景>] (需附带图片)\n"
                 "-p 和 -pre 至少提供一个。"
             )
             return
 
-        prompt = self._resolve_prompt(args.preset, args.prompt)
+        prompt = self._resolve_prompt(args.get("preset", ""), args.get("prompt", ""))
         if not prompt:
-            if args.preset:
-                yield event.plain_result(f"❌ 未知预设名: {args.preset}")
+            if args.get("preset"):
+                available = ", ".join(sorted(self.presets)) if self.presets else "(无)"
+                yield event.plain_result(
+                    f"❌ 未知预设名: {args.get('preset')}\n" f"可用预设: {available}"
+                )
             else:
                 yield event.plain_result("-p 和 -pre 至少提供一个。")
             return
@@ -288,9 +308,9 @@ class GenImagePlugin(Star):
             urls = await self._generate_openai(
                 self.img2img_url,
                 prompt,
-                size=args.size,
-                quality=args.quality,
-                background=args.background,
+                size=args.get("size", ""),
+                quality=args.get("quality", ""),
+                background=args.get("background", ""),
                 num_images=self.default_num,
                 image_data=image_data,
             )
