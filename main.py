@@ -31,11 +31,15 @@ class GenImagePlugin(Star):
         img_model = str(openai_cfg.get("img_model", "")).strip()
         self.txt2img_url = f"{api_base}/{model}" if (api_base and model) else ""
         self.img2img_url = f"{api_base}/{img_model}" if (api_base and img_model) else ""
-        self.default_size = str(openai_cfg.get("default_size", "2048x2048")).strip()
-        self.default_quality = str(openai_cfg.get("default_quality", "medium")).strip()
-        self.default_background = str(
-            openai_cfg.get("default_background", "auto")
-        ).strip()
+        self.default_size = (
+            str(openai_cfg.get("default_size", "2048x2048")).strip() or "2048x2048"
+        )
+        self.default_quality = (
+            str(openai_cfg.get("default_quality", "medium")).strip() or "medium"
+        )
+        self.default_background = (
+            str(openai_cfg.get("default_background", "auto")).strip() or "auto"
+        )
         self.default_num = int(openai_cfg.get("default_num", 1))
         self.timeout = int(openai_cfg.get("timeout", 120))
 
@@ -160,6 +164,8 @@ class GenImagePlugin(Star):
             "size": size or self.default_size,
             "quality": quality or self.default_quality,
             "background": background or self.default_background,
+            "moderation": "low",
+            "output_format": "png",
         }
         if image_data:
             payload["image"] = image_data
