@@ -1,6 +1,6 @@
 {
     "openai": {
-        "description": "OpenAI 兼容 API 配置",
+        "description": "OpenAI 兼容 API 配置（OpenAI / Nano Banana 等）",
         "type": "object",
         "items": {
             "api_key": {
@@ -22,9 +22,14 @@
                 "hint": "例如: gpt-image-2",
                 "type": "string"
             },
+            "provider": {
+                "description": "图像生成提供商",
+                "hint": "openai / nano_banana / gemini，默认: openai",
+                "type": "string"
+            },
             "default_size": {
                 "description": "默认图片尺寸",
-                "hint": "默认: 2048x2048",
+                "hint": "",
                 "type": "string"
             },
             "default_quality": {

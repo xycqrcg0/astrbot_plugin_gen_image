@@ -4,6 +4,8 @@
 - :draw -p <提示词> [-pre <预设名>] [-s <尺寸>] [-q <质量>] [-b <背景>]
 - :pdraw -p <提示词> [-pre <预设名>] [-s <尺寸>] [-q <质量>] [-b <背景>] (需附带图片)
 
+提供商: openai, nano_banana, gemini (在配置中切换)
+
 -p 和 -pre 至少提供一个。
 """
 
@@ -42,6 +44,10 @@ class GenImagePlugin(Star):
         )
         self.default_num = int(openai_cfg.get("default_num", 1))
         self.timeout = int(openai_cfg.get("timeout", 120))
+
+        self.provider = (
+            str(openai_cfg.get("provider", "openai")).strip().lower() or "openai"
+        )
 
         # Preset prompts: key=value per line
         presets_cfg = config.get("presets", {})
@@ -139,6 +145,141 @@ class GenImagePlugin(Star):
     # Image generation backend
     # ------------------------------------------------------------
 
+    _ASPECT_MAP = {
+        "1024x1024": "1:1",
+        "2048x2048": "1:1",
+        "1024x1536": "2:3",
+        "1536x1024": "3:2",
+        "2048x1152": "16:9",
+        "3840x2160": "16:9",
+        "2160x3840": "9:16",
+    }
+
+    _NB_SIZE_MAP = {
+        "1024x1024": "1x1",
+        "2048x2048": "1x1",
+        "1024x1536": "2x3",
+        "1536x1024": "3x2",
+        "2048x1152": "16x9",
+        "3840x2160": "16x9",
+        "2160x3840": "9x16",
+    }
+    _NB_QUALITY_MAP = {"low": "1k", "medium": "2k", "high": "4k"}
+
+    async def _generate(
+        self,
+        prompt: str,
+        *,
+        size: str = "",
+        quality: str = "",
+        background: str = "",
+        num_images: int = 1,
+        image_data: str = "",
+    ) -> list[str]:
+        """Route to the appropriate provider's generation method."""
+        if self.provider == "gemini":
+            return await self._generate_gemini(prompt, size=size, image_data=image_data)
+        if self.provider == "nano_banana":
+            return await self._generate_nano_banana(
+                prompt, size=size, quality=quality, image_data=image_data
+            )
+        # openai / any OpenAI-compatible
+        url = self.img2img_url if image_data else self.txt2img_url
+        return await self._generate_openai(
+            url,
+            prompt,
+            size=size,
+            quality=quality,
+            background=background,
+            num_images=num_images,
+            image_data=image_data,
+        )
+
+    async def _generate_nano_banana(
+        self,
+        prompt: str,
+        *,
+        size: str = "",
+        quality: str = "",
+        image_data: str = "",
+    ) -> list[str]:
+        """Call Nano Banana 2 API for image generation."""
+        if not self.api_key:
+            raise ValueError("API 密钥未配置。")
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload: dict[str, Any] = {
+            "prompt": prompt,
+            "size": self._NB_SIZE_MAP.get(size, "1x1"),
+            "quality": self._NB_QUALITY_MAP.get(quality, "2k"),
+            "response_format": "url",
+        }
+        if image_data:
+            payload["image"] = image_data
+
+        url = self.img2img_url if image_data else self.txt2img_url
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+            ) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    raise RuntimeError(
+                        f"Nano Banana API 请求失败 ({resp.status}): {error_text}"
+                    )
+                data = await resp.json()
+
+        return list(data.get("images", []))
+
+    async def _generate_gemini(
+        self,
+        prompt: str,
+        *,
+        size: str = "",
+        image_data: str = "",
+    ) -> list[str]:
+        """Call Gemini API via jiekou.ai for image generation."""
+        if not self.api_key:
+            raise ValueError("API 密钥未配置。")
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload: dict[str, Any] = {
+            "prompt": prompt,
+            "aspect_ratio": self._ASPECT_MAP.get(size, "1:1"),
+        }
+        if image_data:
+            payload["image_base64s"] = [image_data]
+
+        url = self.img2img_url if image_data else self.txt2img_url
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+            ) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    raise RuntimeError(
+                        f"Gemini API 请求失败 ({resp.status}): {error_text}"
+                    )
+                data = await resp.json()
+
+        return list(data.get("image_urls", []))
+
     async def _generate_openai(
         self,
         url: str,
@@ -161,19 +302,21 @@ class GenImagePlugin(Star):
         payload: dict[str, Any] = {
             "prompt": prompt,
             "n": num_images,
-            "size": size or self.default_size,
             "quality": quality or self.default_quality,
             "background": background or self.default_background,
             "moderation": "low",
             "output_format": "png",
         }
+        resolved_size = size or self.default_size
+        if resolved_size:
+            payload["size"] = resolved_size
         if image_data:
             payload["image"] = image_data
 
         logger.debug(
             "图像请求: url=%s size=%s quality=%s",
             url,
-            payload["size"],
+            payload.get("size", ""),
             payload["quality"],
         )
 
@@ -250,8 +393,7 @@ class GenImagePlugin(Star):
         yield event.plain_result("🎨 正在生成图像，请稍候...")
 
         try:
-            urls = await self._generate_openai(
-                self.txt2img_url,
+            urls = await self._generate(
                 prompt,
                 size=args.get("size", ""),
                 quality=args.get("quality", ""),
@@ -311,8 +453,7 @@ class GenImagePlugin(Star):
             return
 
         try:
-            urls = await self._generate_openai(
-                self.img2img_url,
+            urls = await self._generate(
                 prompt,
                 size=args.get("size", ""),
                 quality=args.get("quality", ""),
