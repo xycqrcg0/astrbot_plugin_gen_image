@@ -107,8 +107,8 @@ class GenImagePlugin(Star):
         """
         result: dict[str, str] = {}
 
-        # -p / --prompt: multi-word until next flag or EOS
-        m = re.search(r"(?:-p|--prompt)\s+(.+?)(?=\s+-[a-zA-Z]|$)", raw_args)
+        # -p / --prompt: multi-word until next flag or EOS (re.DOTALL to handle multiline prompts)
+        m = re.search(r"(?:-p|--prompt)\s+(.+?)(?=\s+-[a-zA-Z]|$)", raw_args, re.DOTALL)
         if m:
             result["prompt"] = m.group(1).strip()
 
