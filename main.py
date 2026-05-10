@@ -222,7 +222,6 @@ class GenImagePlugin(Star):
             "prompt": prompt,
             "size": self._NB_RESOLUTION_MAP.get(size, "1K"),
             "aspect_ratio": self._ASPECT_MAP.get(size, "1:1"),
-            "response_format": "url",
         }
         if image_data:
             payload["image"] = image_data
