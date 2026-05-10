@@ -48,8 +48,8 @@
                 "type": "int"
             },
             "timeout": {
-                "description": "API 请求超时时间 (秒)",
-                "hint": "默认: 120",
+                "description": "API 请求读取超时时间 (秒)",
+                "hint": "socket 读取超时，非总请求超时。默认: 300",
                 "type": "int"
             }
         }

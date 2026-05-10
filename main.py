@@ -43,7 +43,7 @@ class GenImagePlugin(Star):
             str(openai_cfg.get("default_background", "auto")).strip() or "auto"
         )
         self.default_num = int(openai_cfg.get("default_num", 1))
-        self.timeout = int(openai_cfg.get("timeout", 120))
+        self.timeout = int(openai_cfg.get("timeout", 300))
 
         self.provider = (
             str(openai_cfg.get("provider", "openai")).strip().lower() or "openai"
@@ -108,7 +108,9 @@ class GenImagePlugin(Star):
         result: dict[str, str] = {}
 
         # -p / --prompt: multi-word until next flag or EOS (re.DOTALL to handle multiline prompts)
-        m = re.search(r"(?:-p|--prompt)\s+(.+?)(?=\s+-[a-zA-Z]|$)", raw_args, re.DOTALL)
+        m = re.search(
+            r"(?:-p|--prompt)\s+(.+?)(?=\s+--?[a-zA-Z]|$)", raw_args, re.DOTALL
+        )
         if m:
             result["prompt"] = m.group(1).strip()
 
@@ -185,6 +187,10 @@ class GenImagePlugin(Star):
             )
         # openai / any OpenAI-compatible
         url = self.img2img_url if image_data else self.txt2img_url
+        if not url:
+            raise ValueError(
+                "API 地址未配置，请在插件设置中填写 api_base 和 model/img_model。"
+            )
         return await self._generate_openai(
             url,
             prompt,
@@ -228,7 +234,9 @@ class GenImagePlugin(Star):
                 url,
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                timeout=aiohttp.ClientTimeout(
+                    total=None, connect=30, sock_read=self.timeout
+                ),
             ) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()
@@ -269,7 +277,9 @@ class GenImagePlugin(Star):
                 url,
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                timeout=aiohttp.ClientTimeout(
+                    total=None, connect=30, sock_read=self.timeout
+                ),
             ) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()
@@ -325,7 +335,9 @@ class GenImagePlugin(Star):
                 url,
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                timeout=aiohttp.ClientTimeout(
+                    total=None, connect=30, sock_read=self.timeout
+                ),
             ) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()
@@ -339,9 +351,9 @@ class GenImagePlugin(Star):
             urls.extend(str(u) for u in images if u)
         else:
             for item in data.get("data", []):
-                url = item.get("url")
-                if url:
-                    urls.append(url)
+                img_url = item.get("url")
+                if img_url:
+                    urls.append(img_url)
                 elif item.get("b64_json"):
                     urls.append("base64://" + item["b64_json"])
         return urls
@@ -401,10 +413,14 @@ class GenImagePlugin(Star):
                 num_images=self.default_num,
             )
         except Exception as e:
-            logger.exception(f"图像生成失败: {e}")
-            yield event.plain_result(f"❌ 图像生成失败: {e}")
+            logger.exception("图像生成失败")
+            err_msg = str(e) or type(e).__name__
+            yield event.plain_result(f"❌ 图像生成失败: {err_msg}")
             return
 
+        if not urls:
+            yield event.plain_result("❌ 图像生成失败: API 返回了空结果。")
+            return
         for url in urls:
             yield event.image_result(url)
 
@@ -462,10 +478,14 @@ class GenImagePlugin(Star):
                 image_data=image_data,
             )
         except Exception as e:
-            logger.exception(f"图像生成失败: {e}")
-            yield event.plain_result(f"❌ 图像生成失败: {e}")
+            logger.exception("图像生成失败")
+            err_msg = str(e) or type(e).__name__
+            yield event.plain_result(f"❌ 图像生成失败: {err_msg}")
             return
 
+        if not urls:
+            yield event.plain_result("❌ 图像生成失败: API 返回了空结果。")
+            return
         for url in urls:
             yield event.image_result(url)
 
