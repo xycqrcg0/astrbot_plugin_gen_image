@@ -157,16 +157,16 @@ class GenImagePlugin(Star):
         "2160x3840": "9:16",
     }
 
-    _NB_SIZE_MAP = {
-        "1024x1024": "1x1",
-        "2048x2048": "1x1",
-        "1024x1536": "2x3",
-        "1536x1024": "3x2",
-        "2048x1152": "16x9",
-        "3840x2160": "16x9",
-        "2160x3840": "9x16",
+    # Resolution tier mapped from user-facing pixel dimensions.
+    _NB_RESOLUTION_MAP = {
+        "1024x1024": "1K",
+        "1024x1536": "1K",
+        "1536x1024": "1K",
+        "2048x2048": "2K",
+        "2048x1152": "2K",
+        "3840x2160": "4K",
+        "2160x3840": "4K",
     }
-    _NB_QUALITY_MAP = {"low": "1k", "medium": "2k", "high": "4k"}
 
     async def _generate(
         self,
@@ -220,8 +220,8 @@ class GenImagePlugin(Star):
 
         payload: dict[str, Any] = {
             "prompt": prompt,
-            "size": self._NB_SIZE_MAP.get(size, "1x1"),
-            "quality": self._NB_QUALITY_MAP.get(quality, "2k"),
+            "size": self._NB_RESOLUTION_MAP.get(size, "1K"),
+            "aspect_ratio": self._ASPECT_MAP.get(size, "1:1"),
             "response_format": "url",
         }
         if image_data:
@@ -265,6 +265,7 @@ class GenImagePlugin(Star):
 
         payload: dict[str, Any] = {
             "prompt": prompt,
+            "size": self._NB_RESOLUTION_MAP.get(size, "1K"),
             "aspect_ratio": self._ASPECT_MAP.get(size, "1:1"),
         }
         if image_data:
